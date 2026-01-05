@@ -81,14 +81,40 @@ def load_workflow_files(workflows_dir: Path) -> list:
     return workflows
 
 
+def clean_workflow_for_api(workflow: dict) -> dict:
+    """Remove fields that N8n API doesn't accept."""
+    # Fields allowed when creating/updating workflows
+    allowed_fields = {
+        "name",
+        "nodes",
+        "connections",
+        "settings",
+        "staticData",
+        "active",
+    }
+
+    # Clean the workflow
+    cleaned = {k: v for k, v in workflow.items() if k in allowed_fields}
+
+    # Clean nodes - remove fields N8n generates
+    if "nodes" in cleaned:
+        cleaned_nodes = []
+        for node in cleaned["nodes"]:
+            cleaned_node = {k: v for k, v in node.items() if k != "webhookId"}
+            cleaned_nodes.append(cleaned_node)
+        cleaned["nodes"] = cleaned_nodes
+
+    return cleaned
+
+
 def create_workflow(
     client: httpx.Client, base_url: str, workflow: dict, dry_run: bool = False
 ) -> dict:
     """Create a new workflow in N8n."""
     name = workflow.get("name", "Unknown")
 
-    # Remove internal fields before sending
-    payload = {k: v for k, v in workflow.items() if not k.startswith("_")}
+    # Clean workflow for API
+    payload = clean_workflow_for_api(workflow)
 
     if dry_run:
         print(f"  [DRY RUN] Would create workflow: {name}")
@@ -109,8 +135,8 @@ def update_workflow(
     """Update an existing workflow in N8n."""
     name = workflow.get("name", "Unknown")
 
-    # Remove internal fields before sending
-    payload = {k: v for k, v in workflow.items() if not k.startswith("_")}
+    # Clean workflow for API
+    payload = clean_workflow_for_api(workflow)
 
     if dry_run:
         print(f"  [DRY RUN] Would update workflow: {name} (id: {workflow_id})")
