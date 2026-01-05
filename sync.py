@@ -28,6 +28,13 @@ import json
 import argparse
 from pathlib import Path
 
+# Load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass  # dotenv not installed, use environment variables
+
 try:
     import httpx
 except ImportError:
