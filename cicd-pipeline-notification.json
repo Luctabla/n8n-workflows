@@ -1,0 +1,293 @@
+{
+  "name": "CI/CD Pipeline Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cicd-webhook",
+        "responseMode": "lastNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "cicd-webhook",
+      "name": "CI/CD Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "cicd-webhook"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse GitHub Actions webhook payload\nconst payload = $input.item.json.body;\n\nconst event = payload.event || 'unknown';\nconst repo = payload.repository || 'unknown';\nconst branch = payload.branch || payload.ref?.replace('refs/heads/', '') || 'unknown';\nconst commit = payload.commit || payload.sha?.substring(0, 8) || 'unknown';\nconst status = payload.status || 'unknown';\nconst environment = payload.environment || 'unknown';\nconst actor = payload.actor || payload.sender?.login || 'unknown';\nconst runUrl = payload.run_url || payload.html_url || '';\n\n// Determine emoji and color based on status\nlet emoji = '🔄';\nlet color = '#808080';\n\nswitch(status.toLowerCase()) {\n  case 'success':\n  case 'completed':\n    emoji = '✅';\n    color = '#36a64f';\n    break;\n  case 'failure':\n  case 'failed':\n    emoji = '❌';\n    color = '#dc3545';\n    break;\n  case 'cancelled':\n    emoji = '⚠️';\n    color = '#ffc107';\n    break;\n  case 'in_progress':\n  case 'started':\n    emoji = '🚀';\n    color = '#0d6efd';\n    break;\n}\n\nreturn {\n  event,\n  repo,\n  branch,\n  commit,\n  status,\n  environment,\n  actor,\n  runUrl,\n  emoji,\n  color,\n  timestamp: new Date().toISOString(),\n  title: `${emoji} ${event.toUpperCase()}: ${repo}`,\n  message: `Branch: ${branch}\\nCommit: ${commit}\\nEnvironment: ${environment}\\nStatus: ${status}\\nTriggered by: ${actor}`\n};"
+      },
+      "id": "parse-payload",
+      "name": "Parse Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-status",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-success",
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://agents-mcp-' + $json.environment + '.softbin.org/health' }}",
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "maxRetries": 3,
+            "retryInterval": 5000
+          }
+        }
+      },
+      "id": "verify-deployment",
+      "name": "Verify Deployment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "channel": "#deployments",
+        "text": "={{ $('Parse Payload').item.json.title }}",
+        "attachments": [
+          {
+            "color": "={{ $('Parse Payload').item.json.color }}",
+            "pretext": "",
+            "title": "={{ $('Parse Payload').item.json.repo + ' - ' + $('Parse Payload').item.json.branch }}",
+            "title_link": "={{ $('Parse Payload').item.json.runUrl }}",
+            "text": "={{ $('Parse Payload').item.json.message }}",
+            "fields": {
+              "item": [
+                {
+                  "title": "Health Check",
+                  "value": "={{ $json.status || 'N/A' }}",
+                  "short": true
+                },
+                {
+                  "title": "Timestamp",
+                  "value": "={{ $('Parse Payload').item.json.timestamp }}",
+                  "short": true
+                }
+              ]
+            }
+          }
+        ],
+        "otherOptions": {}
+      },
+      "id": "slack-success",
+      "name": "Slack Success",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1120, 200],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "channel": "#deployments",
+        "text": "={{ $('Parse Payload').item.json.title }}",
+        "attachments": [
+          {
+            "color": "={{ $('Parse Payload').item.json.color }}",
+            "pretext": "",
+            "title": "={{ $('Parse Payload').item.json.repo + ' - ' + $('Parse Payload').item.json.branch }}",
+            "title_link": "={{ $('Parse Payload').item.json.runUrl }}",
+            "text": "={{ $('Parse Payload').item.json.message }}",
+            "fields": {
+              "item": [
+                {
+                  "title": "Action Required",
+                  "value": "Check pipeline logs",
+                  "short": true
+                },
+                {
+                  "title": "Timestamp",
+                  "value": "={{ $('Parse Payload').item.json.timestamp }}",
+                  "short": true
+                }
+              ]
+            }
+          }
+        ],
+        "otherOptions": {}
+      },
+      "id": "slack-failure",
+      "name": "Slack Failure",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [900, 420],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "response-status",
+              "name": "status",
+              "value": "processed",
+              "type": "string"
+            },
+            {
+              "id": "response-message",
+              "name": "message",
+              "value": "Notification sent successfully",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "response-ok",
+      "name": "Response OK",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1340, 300]
+    }
+  ],
+  "connections": {
+    "CI/CD Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Payload": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Verify Deployment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Deployment": {
+      "main": [
+        [
+          {
+            "node": "Slack Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Success": {
+      "main": [
+        [
+          {
+            "node": "Response OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Failure": {
+      "main": [
+        [
+          {
+            "node": "Response OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "cicd",
+      "createdAt": "2025-01-05T00:00:00.000Z",
+      "updatedAt": "2025-01-05T00:00:00.000Z"
+    },
+    {
+      "name": "slack",
+      "createdAt": "2025-01-05T00:00:00.000Z",
+      "updatedAt": "2025-01-05T00:00:00.000Z"
+    },
+    {
+      "name": "github-actions",
+      "createdAt": "2025-01-05T00:00:00.000Z",
+      "updatedAt": "2025-01-05T00:00:00.000Z"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2025-01-05T00:00:00.000Z",
+  "versionId": "1"
+}
