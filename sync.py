@@ -91,6 +91,7 @@ def load_workflow_files(workflows_dir: Path) -> list:
 def clean_workflow_for_api(workflow: dict, is_create: bool = False) -> dict:
     """Remove fields that N8n API doesn't accept."""
     # Fields allowed when creating/updating workflows
+    # Note: 'active' is read-only, use PATCH /workflows/{id}/activate instead
     allowed_fields = {
         "name",
         "nodes",
@@ -98,10 +99,6 @@ def clean_workflow_for_api(workflow: dict, is_create: bool = False) -> dict:
         "settings",
         "staticData",
     }
-
-    # 'active' is read-only on create, only allowed on update
-    if not is_create:
-        allowed_fields.add("active")
 
     # Clean the workflow
     cleaned = {k: v for k, v in workflow.items() if k in allowed_fields}

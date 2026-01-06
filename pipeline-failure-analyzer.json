@@ -84,7 +84,7 @@
       "position": [900, 200],
       "credentials": {
         "githubApi": {
-          "id": "GITHUB_CREDENTIAL_ID",
+          "id": "CG8iJeCO3udWTaIJ",
           "name": "GitHub API"
         }
       }
@@ -123,7 +123,7 @@
       "position": [1340, 200],
       "credentials": {
         "githubApi": {
-          "id": "GITHUB_CREDENTIAL_ID",
+          "id": "CG8iJeCO3udWTaIJ",
           "name": "GitHub API"
         }
       }
