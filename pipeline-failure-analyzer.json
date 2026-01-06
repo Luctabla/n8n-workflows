@@ -1,0 +1,342 @@
+{
+  "name": "Pipeline Failure Analyzer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-workflow-failure",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-failure",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "check-conclusion",
+              "leftValue": "={{ $json.body.workflow_run.conclusion }}",
+              "rightValue": "failure",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-failure",
+      "name": "Is Failure?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract workflow run info\nconst payload = $input.item.json.body;\nconst workflowRun = payload.workflow_run;\n\nreturn {\n  run_id: workflowRun.id,\n  repo_full_name: payload.repository.full_name,\n  repo_owner: payload.repository.owner.login,\n  repo_name: payload.repository.name,\n  workflow_name: workflowRun.name,\n  branch: workflowRun.head_branch,\n  commit_sha: workflowRun.head_sha.substring(0, 8),\n  commit_message: workflowRun.head_commit?.message || 'N/A',\n  actor: workflowRun.actor.login,\n  run_url: workflowRun.html_url,\n  jobs_url: workflowRun.jobs_url,\n  logs_url: workflowRun.logs_url,\n  created_at: workflowRun.created_at,\n  updated_at: workflowRun.updated_at\n};"
+      },
+      "id": "extract-info",
+      "name": "Extract Run Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.repo_full_name }}/actions/runs/{{ $json.run_id }}/jobs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "get-jobs",
+      "name": "Get Failed Jobs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 200],
+      "credentials": {
+        "githubApi": {
+          "id": "GITHUB_CREDENTIAL_ID",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Find failed jobs and extract error info\nconst jobs = $input.item.json.jobs || [];\nconst runInfo = $('Extract Run Info').item.json;\n\nconst failedJobs = jobs.filter(job => job.conclusion === 'failure');\n\nconst failedSteps = [];\nfor (const job of failedJobs) {\n  const steps = job.steps || [];\n  for (const step of steps) {\n    if (step.conclusion === 'failure') {\n      failedSteps.push({\n        job_name: job.name,\n        job_id: job.id,\n        step_name: step.name,\n        step_number: step.number,\n        started_at: step.started_at,\n        completed_at: step.completed_at\n      });\n    }\n  }\n}\n\nreturn {\n  ...runInfo,\n  failed_jobs: failedJobs.map(j => ({\n    id: j.id,\n    name: j.name,\n    conclusion: j.conclusion,\n    html_url: j.html_url\n  })),\n  failed_steps: failedSteps,\n  total_failed_jobs: failedJobs.length,\n  total_failed_steps: failedSteps.length,\n  first_failed_job_id: failedJobs[0]?.id,\n  first_failed_job_name: failedJobs[0]?.name,\n  first_failed_step: failedSteps[0]?.step_name || 'Unknown'\n};"
+      },
+      "id": "analyze-failures",
+      "name": "Analyze Failures",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.github.com/repos/{{ $json.repo_full_name }}/actions/jobs/{{ $json.first_failed_job_id }}/logs",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "githubApi",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "get-logs",
+      "name": "Get Job Logs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 200],
+      "credentials": {
+        "githubApi": {
+          "id": "GITHUB_CREDENTIAL_ID",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract relevant error lines from logs\nconst logs = $input.item.json.data || $input.item.json || '';\nconst logsText = typeof logs === 'string' ? logs : JSON.stringify(logs);\nconst failureInfo = $('Analyze Failures').item.json;\n\n// Find error patterns in logs\nconst errorPatterns = [\n  /error[:\\s]/gi,\n  /failed[:\\s]/gi,\n  /exception[:\\s]/gi,\n  /fatal[:\\s]/gi,\n  /cannot find/gi,\n  /not found/gi,\n  /permission denied/gi,\n  /exit code [1-9]/gi,\n  /npm ERR!/gi,\n  /TypeError:/gi,\n  /SyntaxError:/gi,\n  /ModuleNotFoundError:/gi\n];\n\nconst lines = logsText.split('\\n');\nconst errorLines = [];\nconst contextLines = 3;\n\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  const isError = errorPatterns.some(pattern => pattern.test(line));\n  \n  if (isError) {\n    // Get context (lines before and after)\n    const start = Math.max(0, i - contextLines);\n    const end = Math.min(lines.length, i + contextLines + 1);\n    const context = lines.slice(start, end).join('\\n');\n    \n    if (!errorLines.includes(context)) {\n      errorLines.push(context);\n    }\n    \n    // Limit to 5 error blocks\n    if (errorLines.length >= 5) break;\n  }\n}\n\n// Truncate logs for summary (last 100 lines)\nconst lastLines = lines.slice(-100).join('\\n');\n\n// Create error summary\nconst errorSummary = errorLines.length > 0 \n  ? errorLines.join('\\n---\\n')\n  : lastLines.substring(0, 2000);\n\nreturn {\n  ...failureInfo,\n  error_summary: errorSummary.substring(0, 3000),\n  error_count: errorLines.length,\n  logs_truncated: logsText.length > 3000\n};"
+      },
+      "id": "extract-errors",
+      "name": "Extract Errors",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Format Slack message\nconst data = $input.item.json;\n\nconst failedJobsList = data.failed_jobs\n  .map(j => `• <${j.html_url}|${j.name}>`)\n  .join('\\n');\n\nconst failedStepsList = data.failed_steps\n  .slice(0, 5)\n  .map(s => `• ${s.job_name} → ${s.step_name}`)\n  .join('\\n');\n\nreturn {\n  ...data,\n  slack_title: `❌ Pipeline Failed: ${data.repo_name}`,\n  slack_text: `Workflow *${data.workflow_name}* failed on branch \\`${data.branch}\\``,\n  slack_fields: [\n    { title: 'Repository', value: data.repo_full_name, short: true },\n    { title: 'Branch', value: data.branch, short: true },\n    { title: 'Commit', value: `\\`${data.commit_sha}\\` ${data.commit_message.split('\\n')[0].substring(0, 50)}`, short: false },\n    { title: 'Triggered by', value: data.actor, short: true },\n    { title: 'Failed Jobs', value: data.total_failed_jobs.toString(), short: true }\n  ],\n  slack_failed_jobs: failedJobsList,\n  slack_failed_steps: failedStepsList,\n  slack_error_block: '```' + data.error_summary.substring(0, 2500) + '```'\n};"
+      },
+      "id": "format-message",
+      "name": "Format Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "requestMethod": "POST",
+        "channel": "#deployments",
+        "text": "={{ $json.slack_title }}",
+        "attachments": [
+          {
+            "color": "#dc3545",
+            "pretext": "={{ $json.slack_text }}",
+            "title": "View Pipeline Run",
+            "title_link": "={{ $json.run_url }}",
+            "fields": {
+              "item": "={{ $json.slack_fields }}"
+            }
+          },
+          {
+            "color": "#ffc107",
+            "title": "Failed Jobs",
+            "text": "={{ $json.slack_failed_jobs }}",
+            "fields": {
+              "item": []
+            }
+          },
+          {
+            "color": "#6c757d",
+            "title": "Error Summary",
+            "text": "={{ $json.slack_error_block }}",
+            "fields": {
+              "item": []
+            }
+          }
+        ],
+        "otherOptions": {}
+      },
+      "id": "slack-notification",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2000, 200],
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "SLACK_CREDENTIAL_ID",
+          "name": "Slack OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'processed', run_id: $('Extract Run Info').item.json.run_id, failed_jobs: $json.total_failed_jobs }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-processed",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2220, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'skipped', reason: 'Not a failure event' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-skipped",
+      "name": "Respond Skipped",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 400]
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [
+        [
+          {
+            "node": "Is Failure?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Failure?": {
+      "main": [
+        [
+          {
+            "node": "Extract Run Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Run Info": {
+      "main": [
+        [
+          {
+            "node": "Get Failed Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Failed Jobs": {
+      "main": [
+        [
+          {
+            "node": "Analyze Failures",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Failures": {
+      "main": [
+        [
+          {
+            "node": "Get Job Logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job Logs": {
+      "main": [
+        [
+          {
+            "node": "Extract Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Errors": {
+      "main": [
+        [
+          {
+            "node": "Format Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Message": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "active": false
+}

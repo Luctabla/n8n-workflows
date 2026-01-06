@@ -88,7 +88,7 @@ def load_workflow_files(workflows_dir: Path) -> list:
     return workflows
 
 
-def clean_workflow_for_api(workflow: dict) -> dict:
+def clean_workflow_for_api(workflow: dict, is_create: bool = False) -> dict:
     """Remove fields that N8n API doesn't accept."""
     # Fields allowed when creating/updating workflows
     allowed_fields = {
@@ -97,8 +97,11 @@ def clean_workflow_for_api(workflow: dict) -> dict:
         "connections",
         "settings",
         "staticData",
-        "active",
     }
+
+    # 'active' is read-only on create, only allowed on update
+    if not is_create:
+        allowed_fields.add("active")
 
     # Clean the workflow
     cleaned = {k: v for k, v in workflow.items() if k in allowed_fields}
@@ -120,8 +123,8 @@ def create_workflow(
     """Create a new workflow in N8n."""
     name = workflow.get("name", "Unknown")
 
-    # Clean workflow for API
-    payload = clean_workflow_for_api(workflow)
+    # Clean workflow for API (is_create=True to exclude 'active' field)
+    payload = clean_workflow_for_api(workflow, is_create=True)
 
     if dry_run:
         print(f"  [DRY RUN] Would create workflow: {name}")
