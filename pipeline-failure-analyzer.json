@@ -152,7 +152,7 @@
     },
     {
       "parameters": {
-        "authentication": "oAuth2",
+        "authentication": "accessToken",
         "requestMethod": "POST",
         "channel": "#deployments",
         "text": "={{ $json.slack_title }}",
@@ -191,9 +191,9 @@
       "typeVersion": 2.2,
       "position": [2000, 200],
       "credentials": {
-        "slackOAuth2Api": {
-          "id": "SLACK_CREDENTIAL_ID",
-          "name": "Slack OAuth2"
+        "slackApi": {
+          "id": "UWqyOVC5sdGRMNdS",
+          "name": "Slack API"
         }
       }
     },
